@@ -12,7 +12,7 @@ from rich.table import Table
 from rich import print as rprint
 
 from . import config as cfg_mod
-from . import agent
+from . import agent, store
 
 app = typer.Typer(help="forager-sre: autonomous SRE investigation agent.", no_args_is_help=True)
 console = Console()
@@ -77,6 +77,7 @@ def investigate(
     with console.status("[green]reasoning…[/green]", spinner="dots"):
         inv = agent.investigate(incident_id, service, alert, description)
 
+    store.save(inv)
     _print_investigation(inv)
 
 
@@ -153,6 +154,7 @@ def watch(
             with console.status(f"[green]investigating {inc_id}…[/green]", spinner="dots"):
                 inv = agent.investigate(inc_id, svc, name, desc)
 
+            store.save(inv)
             _print_investigation(inv)
 
         time.sleep(poll)
@@ -174,6 +176,35 @@ def serve(
 
     console.print(f"[green]◇[/green] forager-sre server on :{port}")
     uvicorn.run("forager.server:app", host=host, port=port, log_level="info")
+
+
+@app.command()
+def history(
+    limit: int = typer.Option(20, help="Number of past investigations to show"),
+):
+    """Show past investigations from the local database."""
+    records = store.list_recent(limit)
+    if not records:
+        console.print("[dim]No investigations found. Run [bold]forager investigate[/bold] first.[/dim]")
+        return
+
+    t = Table(title="Investigation history", show_header=True, header_style="bold cyan")
+    t.add_column("ID", style="green")
+    t.add_column("Service")
+    t.add_column("Alert", max_width=30)
+    t.add_column("Started", style="dim")
+    t.add_column("Duration", justify="right")
+    t.add_column("Findings", justify="right")
+
+    for r in records:
+        duration = f"{r['duration_s']:.1f}s" if r.get("duration_s") else "—"
+        started = (r.get("started_at") or "")[:16].replace("T", " ")
+        t.add_row(
+            r["id"], r["service"], r["alert"], started,
+            duration, str(r["findings_count"]),
+        )
+
+    console.print(t)
 
 
 def main() -> None:

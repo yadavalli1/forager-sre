@@ -28,6 +28,7 @@ class Config:
     model: str = "claude-sonnet-4-6"
     provider: str = "prometheus"
     repo: str = "."
+    github_token: str = ""
     prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
     kubernetes: KubernetesConfig = field(default_factory=KubernetesConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
@@ -65,8 +66,8 @@ def load() -> Config:
         cfg.slack.token = v
     if v := os.environ.get("SLACK_CHANNEL"):
         cfg.slack.channel = v
-    if v := os.environ.get("KUBECONFIG"):
-        pass  # kubernetes client reads KUBECONFIG automatically
+    if v := os.environ.get("GITHUB_TOKEN"):
+        cfg.github_token = v
     return cfg
 
 

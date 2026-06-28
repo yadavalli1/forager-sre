@@ -25,9 +25,11 @@ def test_root_serves_html(client):
     assert "text/html" in resp.headers["content-type"]
 
 
-def test_investigations_empty(client):
-    from forager import server
-    server._investigations.clear()
+def test_investigations_empty(client, tmp_path, monkeypatch):
+    import forager.store as store_mod
+    store_mod._db = None
+    store_mod._db_path = tmp_path / "test.db"
+    store_mod.init(store_mod._db_path)
     resp = client.get("/investigations")
     assert resp.status_code == 200
     assert resp.json() == []
@@ -144,15 +146,17 @@ def test_pagerduty_webhook_other_event_skipped(client):
     mock_inv.assert_not_called()
 
 
-def test_investigations_list_after_webhook(client):
-    from forager import server
-    server._investigations.clear()
+def test_investigations_list_after_webhook(client, tmp_path):
+    import forager.store as store_mod
+    store_mod._db = None
+    store_mod._db_path = tmp_path / "test.db"
+    store_mod.init(store_mod._db_path)
     inv = _mock_investigation("INC-LIST")
     with patch("forager.agent.investigate", return_value=inv):
         client.post("/webhook/alertmanager", json={
             "alerts": [{
                 "status": "firing",
-                "fingerprint": "listtest",
+                "fingerprint": "listtest2",
                 "labels": {"alertname": "Test"},
                 "annotations": {},
             }]
@@ -161,4 +165,4 @@ def test_investigations_list_after_webhook(client):
     assert resp.status_code == 200
     records = resp.json()
     assert len(records) >= 1
-    assert records[-1]["incident_id"] == "INC-LIST"
+    assert records[0]["id"] == "INC-LIST"

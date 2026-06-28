@@ -7,24 +7,25 @@ from typing import Any
 
 from . import config as cfg_mod
 from .adapters import llm, prometheus, kubernetes, slack
+from .adapters import github
 
 SYSTEM_PROMPT = """\
 You are forager-sre, an autonomous SRE investigation agent.
 Your job is to investigate alerts by querying real telemetry — metrics, pod status, \
-deploy history, and logs — then produce a concise root-cause analysis.
+deploy history, GitHub commits, and logs — then produce a concise root-cause analysis.
 
 Rules:
 - Always start by checking the four golden signals for the affected service \
   (latency, traffic, errors, saturation).
-- Check for recent deploys before concluding there is a novel bug.
-- Cite every claim with the specific metric value, log line, or deploy SHA that \
+- Check for recent GitHub commits and Kubernetes deploys before concluding there is a novel bug.
+- Cite every claim with the specific metric value, log line, commit SHA, or deploy that \
   supports it.
 - When you have enough evidence, stop calling tools and write your final analysis.
 
 Output format for your final answer (no tools):
 ROOT CAUSE: <one sentence>
 EVIDENCE:
-- <metric / log / deploy that proves it>
+- <metric / log / deploy / commit that proves it>
 - ...
 REMEDIATION:
 - <step 1>
@@ -44,17 +45,18 @@ class Investigation:
     incident_id: str
     service: str
     alert: str
+    description: str = ""
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     findings: list[Finding] = field(default_factory=list)
     conclusion: str = ""
     slack_ts: str = ""
 
     def evidence_lines(self) -> list[str]:
-        lines = []
-        for f in self.findings:
-            if f.result.get("status") == "ok":
-                lines.append(f"{f.tool}({json.dumps(f.input)[:60]}) → {str(f.result)[:120]}")
-        return lines
+        return [
+            f"{f.tool}({json.dumps(f.input)[:60]}) → {str(f.result)[:120]}"
+            for f in self.findings
+            if f.result.get("status") == "ok"
+        ]
 
 
 def _execute_tool(name: str, inp: dict, cfg: cfg_mod.Config) -> dict[str, Any]:
@@ -71,12 +73,28 @@ def _execute_tool(name: str, inp: dict, cfg: cfg_mod.Config) -> dict[str, Any]:
             inp.get("lines", 80),
             inp.get("since", "10m"),
         )
+    if name == "get_github_commits":
+        return github.recent_commits(
+            inp["repo"],
+            token=cfg.github_token,
+            since_hours=inp.get("since_hours", 6),
+        )
     return {"status": "error", "error": f"Unknown tool: {name}"}
 
 
-def investigate(incident_id: str, service: str, alert: str, description: str = "") -> Investigation:
+def investigate(
+    incident_id: str,
+    service: str,
+    alert: str,
+    description: str = "",
+) -> Investigation:
     cfg = cfg_mod.load()
-    inv = Investigation(incident_id=incident_id, service=service, alert=alert)
+    inv = Investigation(
+        incident_id=incident_id,
+        service=service,
+        alert=alert,
+        description=description,
+    )
 
     user_msg = (
         f"Incident: {incident_id}\n"
@@ -85,7 +103,6 @@ def investigate(incident_id: str, service: str, alert: str, description: str = "
         f"Description: {description or 'N/A'}\n\n"
         "Please investigate and provide your root-cause analysis."
     )
-
     messages: list[dict] = [{"role": "user", "content": user_msg}]
 
     for _ in range(12):  # safety cap
@@ -95,10 +112,8 @@ def investigate(incident_id: str, service: str, alert: str, description: str = "
             inv.conclusion = resp.text
             break
 
-        # Append assistant turn (Claude format)
         messages.append({"role": "assistant", "content": resp.raw_content})
 
-        # Execute each tool and collect results
         tool_results = []
         for tc in resp.tool_calls:
             result = _execute_tool(tc.name, tc.input, cfg)

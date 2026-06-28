@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,6 +71,28 @@ TOOLS: list[dict] = [
             "required": ["namespace", "selector"],
         },
     },
+    {
+        "name": "get_github_commits",
+        "description": (
+            "Fetch recent commits from a GitHub repository to correlate deploys with the incident. "
+            "Use this to check if a recent code change could have caused the alert."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repo in owner/name format, e.g. 'myorg/checkout-api'",
+                },
+                "since_hours": {
+                    "type": "integer",
+                    "description": "How many hours back to look for commits",
+                    "default": 6,
+                },
+            },
+            "required": ["repo"],
+        },
+    },
 ]
 
 # Translate forager tool list to OpenAI function format
@@ -109,16 +132,34 @@ def _is_openai(model: str) -> bool:
     return model.startswith(("gpt-", "o1", "o3"))
 
 
+_RETRYABLE = ("529", "overloaded", "rate_limit", "rate limit", "529", "503", "502")
+
+
 def call(
     model: str,
     messages: list[dict],
     system: str = "",
+    max_retries: int = 3,
 ) -> LLMResponse:
-    if _is_claude(model):
-        return _call_claude(model, messages, system)
-    if _is_openai(model):
-        return _call_openai(model, messages, system)
-    raise ValueError(f"Unknown model '{model}'. Set FORAGER_MODEL to a Claude or OpenAI model name.")
+    """Call the LLM with exponential backoff on transient errors."""
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(max_retries):
+        try:
+            if _is_claude(model):
+                return _call_claude(model, messages, system)
+            if _is_openai(model):
+                return _call_openai(model, messages, system)
+            raise ValueError(f"Unknown model '{model}'. Set FORAGER_MODEL to a Claude or OpenAI model name.")
+        except ValueError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if any(tag in str(exc).lower() for tag in _RETRYABLE):
+                wait = 2 ** attempt
+                time.sleep(wait)
+                continue
+            raise
+    raise last_exc
 
 
 # ── Claude ────────────────────────────────────────────────────────────────────
