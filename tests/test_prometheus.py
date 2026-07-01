@@ -1,7 +1,8 @@
 """Tests for the Prometheus adapter (mocked HTTP)."""
-import pytest
+
+from unittest.mock import MagicMock, patch
+
 import httpx
-from unittest.mock import patch, MagicMock
 
 
 def _mock_response(data: dict, status: int = 200):
@@ -10,14 +11,13 @@ def _mock_response(data: dict, status: int = 200):
     resp.json.return_value = data
     resp.raise_for_status = MagicMock()
     if status >= 400:
-        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "error", request=MagicMock(), response=resp
-        )
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError("error", request=MagicMock(), response=resp)
     return resp
 
 
 def test_query_ok():
     from forager.adapters.prometheus import query
+
     payload = {
         "data": {
             "result": [
@@ -34,6 +34,7 @@ def test_query_ok():
 
 def test_query_no_data():
     from forager.adapters.prometheus import query
+
     payload = {"data": {"result": []}}
     with patch("httpx.get", return_value=_mock_response(payload)):
         result = query("http://prom:9090", "nonexistent_metric")
@@ -42,6 +43,7 @@ def test_query_no_data():
 
 def test_query_connection_error():
     from forager.adapters.prometheus import query
+
     with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
         result = query("http://prom:9090", "up")
     assert result["status"] == "error"
@@ -50,12 +52,10 @@ def test_query_connection_error():
 
 def test_query_multiple_results():
     from forager.adapters.prometheus import query
+
     payload = {
         "data": {
-            "result": [
-                {"metric": {"instance": f"host{i}"}, "value": [0, str(i * 0.1)]}
-                for i in range(25)
-            ]
+            "result": [{"metric": {"instance": f"host{i}"}, "value": [0, str(i * 0.1)]} for i in range(25)]
         }
     }
     with patch("httpx.get", return_value=_mock_response(payload)):
@@ -66,6 +66,7 @@ def test_query_multiple_results():
 
 def test_query_range_ok():
     from forager.adapters.prometheus import query_range
+
     payload = {
         "data": {
             "result": [
@@ -86,6 +87,7 @@ def test_query_range_ok():
 
 def test_query_range_connection_error():
     from forager.adapters.prometheus import query_range
+
     with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
         result = query_range("http://prom:9090", "up", "5m")
     assert result["status"] == "error"

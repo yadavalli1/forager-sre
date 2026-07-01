@@ -1,14 +1,15 @@
 """FastAPI webhook server — Alertmanager, PagerDuty, and investigation history."""
+
 from __future__ import annotations
+
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import agent, store
-from . import config as cfg_mod
 
 app = FastAPI(title="forager-sre", version="0.1.0")
 
@@ -18,9 +19,10 @@ DEDUP_MINUTES = int(os.environ.get("FORAGER_DEDUP_MINUTES", "30"))
 
 # ── health / meta ─────────────────────────────────────────────────────────────
 
+
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "time": datetime.now(UTC).isoformat()}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -34,6 +36,7 @@ def root():
 
 
 # ── investigations ────────────────────────────────────────────────────────────
+
 
 @app.get("/investigations")
 def list_investigations(limit: int = 50) -> list[dict]:
@@ -49,6 +52,7 @@ def get_investigation(incident_id: str) -> dict:
 
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
@@ -86,7 +90,8 @@ def dashboard():
   .empty {{ color: #5e6b64; padding: 24px 12px; }}
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap">
 </head>
 <body>
 <h1>◇ forager-sre · investigations</h1>
@@ -101,6 +106,7 @@ def dashboard():
 
 
 # ── webhooks ──────────────────────────────────────────────────────────────────
+
 
 def _run_investigation(
     incident_id: str, service: str, alert_name: str, desc: str, fingerprint: str

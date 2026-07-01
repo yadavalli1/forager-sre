@@ -1,8 +1,8 @@
 """Tests for SQLite investigation store and deduplication."""
+
+from datetime import UTC, datetime, timedelta
+
 import pytest
-from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock
 
 import forager.store as store_mod
 
@@ -22,6 +22,7 @@ def fresh_db(tmp_path):
 
 def _make_inv(incident_id: str = "INC-001", service: str = "api", alert: str = "High latency"):
     from forager.agent import Investigation
+
     inv = Investigation(incident_id=incident_id, service=service, alert=alert)
     inv.conclusion = "ROOT CAUSE: connection pool exhaustion"
     inv.slack_ts = "999.000"
@@ -29,6 +30,7 @@ def _make_inv(incident_id: str = "INC-001", service: str = "api", alert: str = "
 
 
 # ── save / get / list ─────────────────────────────────────────────────────────
+
 
 def test_save_and_get():
     inv = _make_inv()
@@ -77,11 +79,16 @@ def test_save_records_duration():
 
 
 def test_save_records_findings_count():
-    from forager.agent import Investigation, Finding
+    from forager.agent import Finding, Investigation
+
     inv = Investigation(incident_id="INC-002", service="db", alert="Disk full")
     inv.findings = [
         Finding("query_metrics", {"query": "up"}, {"status": "ok"}),
-        Finding("get_pod_status", {"namespace": "x", "selector": "a=b"}, {"status": "error", "error": "no kubeconfig"}),
+        Finding(
+            "get_pod_status",
+            {"namespace": "x", "selector": "a=b"},
+            {"status": "error", "error": "no kubeconfig"},
+        ),
     ]
     store_mod.save(inv)
     record = store_mod.get("INC-002")
@@ -100,6 +107,7 @@ def test_save_overwrites_on_duplicate_id():
 
 # ── deduplication ─────────────────────────────────────────────────────────────
 
+
 def test_is_duplicate_unknown_fingerprint():
     assert store_mod.is_duplicate("fp-new") is False
 
@@ -112,10 +120,8 @@ def test_mark_then_is_duplicate():
 def test_is_duplicate_expired_fingerprint(monkeypatch):
     store_mod.mark_fingerprint("fp-old")
     # Simulate the stored timestamp being 2 hours old
-    old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    store_mod._get().execute(
-        "UPDATE fingerprints SET at = ? WHERE fp = ?", (old_time, "fp-old")
-    )
+    old_time = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    store_mod._get().execute("UPDATE fingerprints SET at = ? WHERE fp = ?", (old_time, "fp-old"))
     store_mod._get().commit()
     assert store_mod.is_duplicate("fp-old", cooldown_minutes=30) is False
 

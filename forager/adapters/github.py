@@ -1,7 +1,9 @@
 """GitHub adapter — fetch recent commits and PRs for deploy correlation."""
+
 from __future__ import annotations
+
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -25,7 +27,7 @@ def _normalise_repo(repo: str) -> str:
 def recent_commits(repo: str, token: str = "", since_hours: int = 6) -> dict[str, Any]:
     """Return commits pushed to the default branch in the last N hours."""
     repo = _normalise_repo(repo)
-    since = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()
+    since = (datetime.now(UTC) - timedelta(hours=since_hours)).isoformat()
     try:
         r = httpx.get(
             f"https://api.github.com/repos/{repo}/commits",

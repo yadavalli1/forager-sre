@@ -1,24 +1,24 @@
 """forager CLI — forager init / investigate / watch."""
+
 from __future__ import annotations
+
 import os
-import sys
 import time
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich import print as rprint
 
-from . import config as cfg_mod
 from . import agent, store
+from . import config as cfg_mod
 
 app = typer.Typer(help="forager-sre: autonomous SRE investigation agent.", no_args_is_help=True)
 console = Console()
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
+
 
 @app.command()
 def init(
@@ -52,7 +52,7 @@ def init(
         cfg.slack.channel = typer.prompt("  Slack channel", default="#incidents")
 
     cfg_mod.save(cfg)
-    console.print(f"\n[green]✓[/green] Config saved to [bold]forager.yaml[/bold]")
+    console.print("\n[green]✓[/green] Config saved to [bold]forager.yaml[/bold]")
     console.print(f"  model  = [cyan]{cfg.model}[/cyan]")
     console.print(f"  prom   = [cyan]{cfg.prometheus.url}[/cyan]")
     if cfg.slack.token:
@@ -61,6 +61,7 @@ def init(
 
 
 # ── investigate ───────────────────────────────────────────────────────────────
+
 
 @app.command()
 def investigate(
@@ -90,6 +91,7 @@ def _print_investigation(inv: agent.Investigation) -> None:
         t.add_column("Status", max_width=8)
         for f in inv.findings:
             import json
+
             t.add_row(
                 f.tool,
                 json.dumps(f.input)[:60],
@@ -98,13 +100,16 @@ def _print_investigation(inv: agent.Investigation) -> None:
         console.print(t)
 
     console.print(
-        Panel(inv.conclusion or "(no conclusion)", title=f"[bold]{inv.incident_id}[/bold]", border_style="green")
+        Panel(
+            inv.conclusion or "(no conclusion)", title=f"[bold]{inv.incident_id}[/bold]", border_style="green"
+        )
     )
     if inv.slack_ts:
         console.print(f"[dim]Posted to Slack (ts={inv.slack_ts})[/dim]")
 
 
 # ── watch ─────────────────────────────────────────────────────────────────────
+
 
 @app.command()
 def watch(
@@ -162,6 +167,7 @@ def watch(
 
 # ── server (Cloud Run) ────────────────────────────────────────────────────────
 
+
 @app.command()
 def serve(
     port: int = typer.Option(int(os.environ.get("PORT", "8080")), help="HTTP port"),
@@ -172,7 +178,7 @@ def serve(
         import uvicorn
     except ImportError:
         console.print("[red]uvicorn not installed. Run: pip install uvicorn[standard][/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     console.print(f"[green]◇[/green] forager-sre server on :{port}")
     uvicorn.run("forager.server:app", host=host, port=port, log_level="info")
@@ -200,8 +206,12 @@ def history(
         duration = f"{r['duration_s']:.1f}s" if r.get("duration_s") else "—"
         started = (r.get("started_at") or "")[:16].replace("T", " ")
         t.add_row(
-            r["id"], r["service"], r["alert"], started,
-            duration, str(r["findings_count"]),
+            r["id"],
+            r["service"],
+            r["alert"],
+            started,
+            duration,
+            str(r["findings_count"]),
         )
 
     console.print(t)

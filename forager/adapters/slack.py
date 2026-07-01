@@ -1,5 +1,7 @@
 """Slack adapter — post investigation results to a channel."""
+
 from __future__ import annotations
+
 from typing import Any
 
 
@@ -8,7 +10,6 @@ def post(token: str, channel: str, text: str, blocks: list | None = None) -> dic
         return {"status": "skipped", "reason": "SLACK_TOKEN not set"}
     try:
         from slack_sdk import WebClient  # type: ignore
-        from slack_sdk.errors import SlackApiError
 
         client = WebClient(token=token)
         kwargs: dict[str, Any] = {"channel": channel, "text": text}

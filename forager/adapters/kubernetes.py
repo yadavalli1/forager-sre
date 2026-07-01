@@ -1,11 +1,15 @@
 """Kubernetes adapter — pods, deployments, logs."""
+
 from __future__ import annotations
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
 from typing import Any
 
 
 def _client():
-    from kubernetes import client, config as k8s_config  # type: ignore
+    from kubernetes import client  # type: ignore
+    from kubernetes import config as k8s_config
+
     try:
         k8s_config.load_incluster_config()
     except Exception:
@@ -24,15 +28,15 @@ def pod_status(namespace: str, selector: str) -> dict[str, Any]:
                 (cs.restart_count for cs in (p.status.container_statuses or [])),
                 0,
             )
-            rows.append({
-                "name": p.metadata.name,
-                "phase": p.status.phase,
-                "restarts": restarts,
-                "ready": all(
-                    cs.ready for cs in (p.status.container_statuses or [])
-                ),
-                "node": p.spec.node_name,
-            })
+            rows.append(
+                {
+                    "name": p.metadata.name,
+                    "phase": p.status.phase,
+                    "restarts": restarts,
+                    "ready": all(cs.ready for cs in (p.status.container_statuses or [])),
+                    "node": p.spec.node_name,
+                }
+            )
         if not rows:
             return {"status": "no_pods", "selector": selector, "namespace": namespace}
         return {"status": "ok", "pods": rows}
@@ -51,16 +55,24 @@ def recent_deploys(namespace: str, deployment: str) -> dict[str, Any]:
         entries = []
         for rs in sorted(
             rs_list.items,
-            key=lambda r: r.metadata.creation_timestamp or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda r: r.metadata.creation_timestamp or datetime.min.replace(tzinfo=UTC),
             reverse=True,
         )[:5]:
-            entries.append({
-                "name": rs.metadata.name,
-                "created": rs.metadata.creation_timestamp.isoformat() if rs.metadata.creation_timestamp else None,
-                "replicas": rs.status.replicas,
-                "ready": rs.status.ready_replicas,
-                "image": (rs.spec.template.spec.containers[0].image if rs.spec.template.spec.containers else None),
-            })
+            entries.append(
+                {
+                    "name": rs.metadata.name,
+                    "created": rs.metadata.creation_timestamp.isoformat()
+                    if rs.metadata.creation_timestamp
+                    else None,
+                    "replicas": rs.status.replicas,
+                    "ready": rs.status.ready_replicas,
+                    "image": (
+                        rs.spec.template.spec.containers[0].image
+                        if rs.spec.template.spec.containers
+                        else None
+                    ),
+                }
+            )
         return {"status": "ok", "deployment": deployment, "history": entries}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}

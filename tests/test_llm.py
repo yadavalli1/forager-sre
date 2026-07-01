@@ -1,10 +1,13 @@
 """Tests for the LLM adapter — Claude and OpenAI routing."""
+
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 
 def test_is_claude():
     from forager.adapters.llm import _is_claude
+
     assert _is_claude("claude-sonnet-4-6")
     assert _is_claude("claude-opus-4-8")
     assert _is_claude("us.anthropic.claude-3-5-sonnet")
@@ -14,6 +17,7 @@ def test_is_claude():
 
 def test_is_openai():
     from forager.adapters.llm import _is_openai
+
     assert _is_openai("gpt-4o")
     assert _is_openai("gpt-4o-mini")
     assert _is_openai("o1-preview")
@@ -22,6 +26,7 @@ def test_is_openai():
 
 def test_unknown_model_raises():
     from forager.adapters.llm import call
+
     with pytest.raises(ValueError, match="Unknown model"):
         call("llama3-local", [{"role": "user", "content": "hi"}])
 
@@ -34,7 +39,7 @@ def _make_claude_response(text: str = "", tool_calls: list = None):
         tb.type = "text"
         tb.text = text
         blocks.append(tb)
-    for tc in (tool_calls or []):
+    for tc in tool_calls or []:
         cb = MagicMock()
         cb.type = "tool_use"
         cb.id = tc["id"]
@@ -47,7 +52,8 @@ def _make_claude_response(text: str = "", tool_calls: list = None):
 
 
 def test_claude_end_turn():
-    from forager.adapters.llm import call, LLMResponse
+    from forager.adapters.llm import call
+
     mock_resp = _make_claude_response(text="ROOT CAUSE: connection pool exhaustion")
     with patch("anthropic.Anthropic") as MockCls:
         MockCls.return_value.messages.create.return_value = mock_resp
@@ -60,9 +66,12 @@ def test_claude_end_turn():
 
 def test_claude_tool_use():
     from forager.adapters.llm import call
-    mock_resp = _make_claude_response(tool_calls=[
-        {"id": "tc_001", "name": "query_metrics", "input": {"query": "up"}},
-    ])
+
+    mock_resp = _make_claude_response(
+        tool_calls=[
+            {"id": "tc_001", "name": "query_metrics", "input": {"query": "up"}},
+        ]
+    )
     with patch("anthropic.Anthropic") as MockCls:
         MockCls.return_value.messages.create.return_value = mock_resp
         result = call("claude-sonnet-4-6", [{"role": "user", "content": "investigate"}])
@@ -75,10 +84,17 @@ def test_claude_tool_use():
 
 def test_claude_multiple_tool_calls():
     from forager.adapters.llm import call
-    mock_resp = _make_claude_response(tool_calls=[
-        {"id": "tc_001", "name": "query_metrics", "input": {"query": "up"}},
-        {"id": "tc_002", "name": "get_pod_status", "input": {"namespace": "default", "selector": "app=api"}},
-    ])
+
+    mock_resp = _make_claude_response(
+        tool_calls=[
+            {"id": "tc_001", "name": "query_metrics", "input": {"query": "up"}},
+            {
+                "id": "tc_002",
+                "name": "get_pod_status",
+                "input": {"namespace": "default", "selector": "app=api"},
+            },
+        ]
+    )
     with patch("anthropic.Anthropic") as MockCls:
         MockCls.return_value.messages.create.return_value = mock_resp
         result = call("claude-sonnet-4-6", [{"role": "user", "content": "investigate"}])
@@ -89,6 +105,7 @@ def test_claude_multiple_tool_calls():
 
 def test_tool_definitions_are_valid():
     from forager.adapters.llm import TOOLS
+
     for tool in TOOLS:
         assert "name" in tool
         assert "description" in tool

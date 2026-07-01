@@ -1,10 +1,11 @@
 """SQLite-backed investigation store with alert deduplication."""
+
 from __future__ import annotations
+
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 DB_FILE = Path("forager.db")
 
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS fingerprints (
 );
 """
 
-_db: Optional[sqlite3.Connection] = None
+_db: sqlite3.Connection | None = None
 _db_path: Path = DB_FILE
 
 
@@ -55,9 +56,10 @@ def _get() -> sqlite3.Connection:
 
 # ── investigations ────────────────────────────────────────────────────────────
 
+
 def save(inv: object) -> None:
     """Persist a forager.agent.Investigation."""
-    finished = datetime.now(timezone.utc)
+    finished = datetime.now(UTC)
     duration = (finished - inv.started_at).total_seconds()  # type: ignore[attr-defined]
     findings = [
         {"tool": f.tool, "input": f.input, "status": f.result.get("status")}
@@ -69,7 +71,9 @@ def save(inv: object) -> None:
             conclusion, findings_count, findings_json, slack_ts)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            inv.incident_id, inv.service, inv.alert,  # type: ignore[attr-defined]
+            inv.incident_id,
+            inv.service,
+            inv.alert,  # type: ignore[attr-defined]
             getattr(inv, "description", ""),
             inv.started_at.isoformat(),  # type: ignore[attr-defined]
             finished.isoformat(),
@@ -83,31 +87,28 @@ def save(inv: object) -> None:
     _get().commit()
 
 
-def get(incident_id: str) -> Optional[dict]:
-    row = _get().execute(
-        "SELECT * FROM investigations WHERE id = ?", (incident_id,)
-    ).fetchone()
+def get(incident_id: str) -> dict | None:
+    row = _get().execute("SELECT * FROM investigations WHERE id = ?", (incident_id,)).fetchone()
     return dict(row) if row else None
 
 
 def list_recent(limit: int = 50) -> list[dict]:
-    rows = _get().execute(
-        "SELECT * FROM investigations ORDER BY started_at DESC LIMIT ?", (limit,)
-    ).fetchall()
+    rows = (
+        _get().execute("SELECT * FROM investigations ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+    )
     return [dict(r) for r in rows]
 
 
 # ── deduplication ─────────────────────────────────────────────────────────────
 
+
 def is_duplicate(fingerprint: str, cooldown_minutes: int = 30) -> bool:
     """Return True if this fingerprint was investigated within the cooldown window."""
-    row = _get().execute(
-        "SELECT at FROM fingerprints WHERE fp = ?", (fingerprint,)
-    ).fetchone()
+    row = _get().execute("SELECT at FROM fingerprints WHERE fp = ?", (fingerprint,)).fetchone()
     if not row:
         return False
     at = datetime.fromisoformat(row["at"])
-    age_s = (datetime.now(timezone.utc) - at).total_seconds()
+    age_s = (datetime.now(UTC) - at).total_seconds()
     return age_s < cooldown_minutes * 60
 
 
@@ -115,6 +116,6 @@ def mark_fingerprint(fingerprint: str) -> None:
     db = _get()
     db.execute(
         "INSERT OR REPLACE INTO fingerprints (fp, at) VALUES (?, ?)",
-        (fingerprint, datetime.now(timezone.utc).isoformat()),
+        (fingerprint, datetime.now(UTC).isoformat()),
     )
     db.commit()

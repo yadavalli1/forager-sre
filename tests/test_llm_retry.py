@@ -1,10 +1,11 @@
 """Tests for LLM retry / backoff logic."""
+
 import pytest
-from unittest.mock import patch, MagicMock, call
 
 
 def _end_turn_response(text: str = "ROOT CAUSE: ok"):
     from forager.adapters.llm import LLMResponse
+
     return LLMResponse(stop_reason="end_turn", text=text, tool_calls=[], raw_content=[])
 
 
@@ -79,5 +80,6 @@ def test_raises_after_max_retries(monkeypatch):
 def test_unknown_model_never_retried(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda _: None)
     from forager.adapters import llm
+
     with pytest.raises(ValueError, match="Unknown model"):
         llm.call("unsupported-model-xyz", [], max_retries=3)

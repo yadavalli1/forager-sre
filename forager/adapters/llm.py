@@ -1,5 +1,7 @@
 """LLM adapter — supports Claude (default) and OpenAI."""
+
 from __future__ import annotations
+
 import json
 import os
 import time
@@ -155,7 +157,7 @@ def call(
         except Exception as exc:
             last_exc = exc
             if any(tag in str(exc).lower() for tag in _RETRYABLE):
-                wait = 2 ** attempt
+                wait = 2**attempt
                 time.sleep(wait)
                 continue
             raise
@@ -163,6 +165,7 @@ def call(
 
 
 # ── Claude ────────────────────────────────────────────────────────────────────
+
 
 def _call_claude(model: str, messages: list[dict], system: str) -> LLMResponse:
     import anthropic  # lazy import
@@ -194,6 +197,7 @@ def _call_claude(model: str, messages: list[dict], system: str) -> LLMResponse:
 
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
+
 
 def _call_openai(model: str, messages: list[dict], system: str) -> LLMResponse:
     import openai  # lazy import

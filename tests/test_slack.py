@@ -1,16 +1,18 @@
 """Tests for the Slack adapter."""
-import pytest
-from unittest.mock import patch, MagicMock
+
+from unittest.mock import MagicMock, patch
 
 
 def test_post_no_token():
     from forager.adapters.slack import post
+
     result = post("", "#incidents", "test message")
     assert result["status"] == "skipped"
 
 
 def test_post_ok():
     from forager.adapters.slack import post
+
     mock_client = MagicMock()
     mock_client.chat_postMessage.return_value = {"ts": "1234567890.123", "channel": "C123"}
     with patch("slack_sdk.WebClient", return_value=mock_client):
@@ -21,6 +23,7 @@ def test_post_ok():
 
 def test_post_error():
     from forager.adapters.slack import post
+
     mock_client = MagicMock()
     mock_client.chat_postMessage.side_effect = Exception("channel_not_found")
     with patch("slack_sdk.WebClient", return_value=mock_client):
@@ -31,6 +34,7 @@ def test_post_error():
 
 def test_investigation_blocks_structure():
     from forager.adapters.slack import investigation_blocks
+
     blocks = investigation_blocks(
         "INC-4827",
         "Root cause: connection pool exhaustion on db-primary",
@@ -47,11 +51,13 @@ def test_investigation_blocks_structure():
 
 def test_investigation_blocks_truncates_evidence():
     from forager.adapters.slack import investigation_blocks
+
     evidence = [f"finding {i}" for i in range(20)]
     blocks = investigation_blocks("INC-1", "conclusion", evidence)
     # Only first 8 evidence items included
     section_text = next(
-        b["text"]["text"] for b in blocks
+        b["text"]["text"]
+        for b in blocks
         if b.get("type") == "section" and "Evidence" in b.get("text", {}).get("text", "")
     )
     assert "finding 7" in section_text

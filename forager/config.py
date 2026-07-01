@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import os
-import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+
+import yaml
 
 
 @dataclass
@@ -13,7 +14,7 @@ class PrometheusConfig:
 
 @dataclass
 class KubernetesConfig:
-    context: Optional[str] = None
+    context: str | None = None
     namespace: str = "default"
 
 
@@ -47,15 +48,13 @@ def load() -> Config:
         if "prometheus" in raw:
             cfg.prometheus = PrometheusConfig(**raw["prometheus"])
         if "kubernetes" in raw:
-            cfg.kubernetes = KubernetesConfig(**{
-                k: v for k, v in raw["kubernetes"].items()
-                if k in KubernetesConfig.__dataclass_fields__
-            })
+            cfg.kubernetes = KubernetesConfig(
+                **{k: v for k, v in raw["kubernetes"].items() if k in KubernetesConfig.__dataclass_fields__}
+            )
         if "slack" in raw:
-            cfg.slack = SlackConfig(**{
-                k: v for k, v in raw["slack"].items()
-                if k in SlackConfig.__dataclass_fields__
-            })
+            cfg.slack = SlackConfig(
+                **{k: v for k, v in raw["slack"].items() if k in SlackConfig.__dataclass_fields__}
+            )
 
     # Environment overrides
     if v := os.environ.get("FORAGER_MODEL"):

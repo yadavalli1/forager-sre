@@ -1,13 +1,15 @@
 """Tests for the FastAPI webhook server."""
-import json
+
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 
 @pytest.fixture
 def client():
     from forager.server import app
+
     return TestClient(app)
 
 
@@ -27,6 +29,7 @@ def test_root_serves_html(client):
 
 def test_investigations_empty(client, tmp_path, monkeypatch):
     import forager.store as store_mod
+
     store_mod._db = None
     store_mod._db_path = tmp_path / "test.db"
     store_mod.init(store_mod._db_path)
@@ -36,8 +39,9 @@ def test_investigations_empty(client, tmp_path, monkeypatch):
 
 
 def _mock_investigation(incident_id: str) -> MagicMock:
+
     from forager.agent import Investigation
-    from datetime import datetime, timezone
+
     inv = Investigation(incident_id=incident_id, service="api", alert="High error rate")
     inv.conclusion = "ROOT CAUSE: depleted connection pool"
     return inv
@@ -67,7 +71,7 @@ def test_alertmanager_webhook_firing(client):
     mock_inv.assert_called_once()
     call_args = mock_inv.call_args[0]
     assert call_args[2] == "HighErrorRate"  # alert name
-    assert call_args[1] == "api"            # service
+    assert call_args[1] == "api"  # service
 
 
 def test_alertmanager_webhook_resolved_skipped(client):
@@ -137,7 +141,9 @@ def test_pagerduty_webhook_triggered(client):
 
 def test_pagerduty_webhook_other_event_skipped(client):
     payload = {
-        "events": [{"event_type": "incident.resolved", "data": {"number": 1, "title": "t", "service": {"name": "s"}}}]
+        "events": [
+            {"event_type": "incident.resolved", "data": {"number": 1, "title": "t", "service": {"name": "s"}}}
+        ]
     }
     with patch("forager.agent.investigate") as mock_inv:
         resp = client.post("/webhook/pagerduty", json=payload)
@@ -148,19 +154,25 @@ def test_pagerduty_webhook_other_event_skipped(client):
 
 def test_investigations_list_after_webhook(client, tmp_path):
     import forager.store as store_mod
+
     store_mod._db = None
     store_mod._db_path = tmp_path / "test.db"
     store_mod.init(store_mod._db_path)
     inv = _mock_investigation("INC-LIST")
     with patch("forager.agent.investigate", return_value=inv):
-        client.post("/webhook/alertmanager", json={
-            "alerts": [{
-                "status": "firing",
-                "fingerprint": "listtest2",
-                "labels": {"alertname": "Test"},
-                "annotations": {},
-            }]
-        })
+        client.post(
+            "/webhook/alertmanager",
+            json={
+                "alerts": [
+                    {
+                        "status": "firing",
+                        "fingerprint": "listtest2",
+                        "labels": {"alertname": "Test"},
+                        "annotations": {},
+                    }
+                ]
+            },
+        )
     resp = client.get("/investigations")
     assert resp.status_code == 200
     records = resp.json()

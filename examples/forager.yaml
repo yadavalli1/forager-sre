@@ -1,0 +1,17 @@
+# Example forager-sre configuration.
+# Copy to your working directory as `forager.yaml`, or rely on env vars.
+# NEVER put API keys in this file if it will be committed — use env vars:
+#   ANTHROPIC_API_KEY / OPENAI_API_KEY, SLACK_TOKEN, GITHUB_TOKEN
+
+model: claude-sonnet-4-6          # or gpt-4o etc.; override with FORAGER_MODEL
+provider: prometheus
+repo: acme/api                    # GitHub repo for deploy correlation
+
+prometheus:
+  url: http://prometheus:9090     # override with PROMETHEUS_URL
+
+kubernetes:
+  namespace: prod
+
+slack:
+  channel: "#incidents"           # token via SLACK_TOKEN env var

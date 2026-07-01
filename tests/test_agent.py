@@ -1,7 +1,6 @@
 """Tests for the core investigation loop."""
-import json
-import pytest
-from unittest.mock import patch, MagicMock
+
+from unittest.mock import MagicMock, patch
 
 from forager.adapters.llm import LLMResponse, ToolCall
 
@@ -34,6 +33,7 @@ def test_investigate_immediate_conclusion(tmp_path, monkeypatch):
     with patch("forager.adapters.llm.call", return_value=_end_turn_response(conclusion)):
         with patch("forager.adapters.slack.post", return_value={"status": "skipped"}):
             from forager import agent
+
             inv = agent.investigate("INC-001", "api", "High latency")
 
     assert inv.incident_id == "INC-001"
@@ -55,14 +55,19 @@ def test_investigate_with_tool_calls(tmp_path, monkeypatch):
         _end_turn_response(conclusion),
     ]
     prom_result = {"status": "ok", "results": [{"labels": {}, "value": "0.42"}]}
-    k8s_result = {"status": "ok", "pods": [{"name": "api-abc", "phase": "Running", "restarts": 5, "ready": True, "node": "node-1"}]}
+    k8s_result = {
+        "status": "ok",
+        "pods": [{"name": "api-abc", "phase": "Running", "restarts": 5, "ready": True, "node": "node-1"}],
+    }
 
     with patch("forager.adapters.llm.call", side_effect=call_responses):
         with patch("forager.adapters.prometheus.query", return_value=prom_result):
             with patch("forager.adapters.kubernetes.pod_status", return_value=k8s_result):
                 with patch("forager.adapters.slack.post", return_value={"status": "skipped"}):
                     from importlib import reload
+
                     import forager.agent as agent_mod
+
                     reload(agent_mod)
                     inv = agent_mod.investigate("INC-002", "api", "Pod OOMKilled")
 
@@ -77,7 +82,6 @@ def test_investigate_unknown_tool_returns_error(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import forager.agent as agent_mod
 
-    tc = _tool_call("nonexistent_tool", {}, "tc_bad")
     result = agent_mod._execute_tool("nonexistent_tool", {}, MagicMock())
     assert result["status"] == "error"
     assert "Unknown tool" in result["error"]
@@ -91,8 +95,11 @@ def test_investigate_posts_to_slack(tmp_path, monkeypatch):
 
     conclusion = "ROOT CAUSE: disk saturation on db-primary"
     with patch("forager.adapters.llm.call", return_value=_end_turn_response(conclusion)):
-        with patch("forager.adapters.slack.post", return_value={"status": "ok", "ts": "999.000"}) as mock_post:
+        with patch(
+            "forager.adapters.slack.post", return_value={"status": "ok", "ts": "999.000"}
+        ) as mock_post:
             import forager.agent as agent_mod
+
             inv = agent_mod.investigate("INC-003", "db", "Disk full")
 
     mock_post.assert_called_once()
@@ -109,7 +116,11 @@ def test_evidence_lines_only_ok_findings(tmp_path, monkeypatch):
     inv = agent_mod.Investigation("INC-X", "svc", "alert")
     inv.findings = [
         agent_mod.Finding("query_metrics", {"query": "up"}, {"status": "ok", "results": []}),
-        agent_mod.Finding("get_pod_status", {"namespace": "x", "selector": "a=b"}, {"status": "error", "error": "no kubeconfig"}),
+        agent_mod.Finding(
+            "get_pod_status",
+            {"namespace": "x", "selector": "a=b"},
+            {"status": "error", "error": "no kubeconfig"},
+        ),
     ]
     lines = inv.evidence_lines()
     assert len(lines) == 1

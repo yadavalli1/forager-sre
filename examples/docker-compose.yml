@@ -1,0 +1,29 @@
+# Local end-to-end demo: Prometheus + Alertmanager + forager-sre.
+# Usage:
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#   docker compose -f examples/docker-compose.yml up --build
+services:
+  forager:
+    build:
+      context: ..
+      dockerfile: Dockerfile.agent
+    ports:
+      - "8080:8080"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PROMETHEUS_URL: http://prometheus:9090
+      # SLACK_TOKEN: ${SLACK_TOKEN}
+      # SLACK_CHANNEL: "#incidents"
+      # GITHUB_TOKEN: ${GITHUB_TOKEN}
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro

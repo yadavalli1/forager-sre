@@ -1,13 +1,14 @@
 """Core investigation loop: observe → correlate → hypothesize → verify."""
+
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import config as cfg_mod
-from .adapters import llm, prometheus, kubernetes, slack
-from .adapters import github
+from .adapters import github, kubernetes, llm, prometheus, slack
 
 SYSTEM_PROMPT = """\
 You are forager-sre, an autonomous SRE investigation agent.
@@ -46,7 +47,7 @@ class Investigation:
     service: str
     alert: str
     description: str = ""
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     findings: list[Finding] = field(default_factory=list)
     conclusion: str = ""
     slack_ts: str = ""
@@ -118,19 +119,19 @@ def investigate(
         for tc in resp.tool_calls:
             result = _execute_tool(tc.name, tc.input, cfg)
             inv.findings.append(Finding(tool=tc.name, input=tc.input, result=result))
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tc.id,
-                "content": json.dumps(result),
-            })
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": json.dumps(result),
+                }
+            )
 
         messages.append({"role": "user", "content": tool_results})
 
     # Post to Slack if configured
     if cfg.slack.token:
-        blocks = slack.investigation_blocks(
-            inv.incident_id, inv.conclusion, inv.evidence_lines()
-        )
+        blocks = slack.investigation_blocks(inv.incident_id, inv.conclusion, inv.evidence_lines())
         result = slack.post(
             cfg.slack.token,
             cfg.slack.channel,
