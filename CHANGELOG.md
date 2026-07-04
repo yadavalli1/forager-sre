@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Guarded remediation**: allowlisted actions (`restart_deployment`,
+  `scale_deployment`, `rollback_deployment`) via `forager remediate` —
+  dry-run by default, human-approved with `--yes`, prior state snapshotted,
+  reversible with `forager remediate-undo`. Never exposed as LLM tools.
+- **Confidence scores**: conclusions carry `CONFIDENCE: high|medium|low`;
+  low-confidence reports are flagged for human review in Slack.
+- **Feedback loop**: `POST /investigations/{id}/feedback` (👍/👎 + note);
+  downvoted conclusions are excluded from institutional memory.
+- **Postmortem generation**: `forager postmortem <id>` and
+  `GET /investigations/{id}/postmortem` produce a blameless Markdown review.
+- **Alert correlation**: opt-in `FORAGER_GROUP_ALERTS=1` groups a batch's
+  alerts by service into one investigation per service.
+- **Live Slack progress**: a placeholder is posted when the investigation
+  starts and updated in place with the final report.
+- **Self-observability**: `GET /metrics` in Prometheus text format
+  (investigation count/duration, dedup hits, feedback verdicts).
+- **Loki adapter** (`search_logs` tool, `LOKI_URL`): LogQL search across
+  services, not just single-pod tails.
+- **Datadog adapter**: `provider: datadog` routes `query_metrics` to the
+  Datadog v1 metrics API (`DD_API_KEY`/`DD_APP_KEY`/`DD_SITE`).
 - **LiteLLM routing**: any non-Claude/OpenAI model name (e.g. `bedrock/...`,
   `ollama/...`) routes through LiteLLM via the new `[litellm]` extra.
 - **YAML runbooks** (`runbooks/` or `FORAGER_RUNBOOKS_DIR`): per-alert

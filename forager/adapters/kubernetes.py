@@ -78,6 +78,87 @@ def recent_deploys(namespace: str, deployment: str) -> dict[str, Any]:
         return {"status": "error", "error": str(exc)}
 
 
+# ── write operations (remediation only — never exposed as agent tools) ────────
+#
+# These are called exclusively from forager.remediation after human approval.
+# Each returns a snapshot of prior state so the action can be undone.
+
+
+def scale_deployment(namespace: str, deployment: str, replicas: int) -> dict[str, Any]:
+    try:
+        k = _client()
+        apps = k.AppsV1Api()
+        current = apps.read_namespaced_deployment(deployment, namespace)
+        previous = current.spec.replicas
+        apps.patch_namespaced_deployment(deployment, namespace, {"spec": {"replicas": replicas}})
+        return {
+            "status": "ok",
+            "action": "scale_deployment",
+            "snapshot": {"replicas": previous},
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def restart_deployment(namespace: str, deployment: str) -> dict[str, Any]:
+    """Trigger a rolling restart via the kubectl-style restartedAt annotation."""
+    try:
+        k = _client()
+        apps = k.AppsV1Api()
+        now = datetime.now(UTC).isoformat()
+        apps.patch_namespaced_deployment(
+            deployment,
+            namespace,
+            {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": now}}}}},
+        )
+        return {"status": "ok", "action": "restart_deployment", "snapshot": {"restartedAt": now}}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def rollback_deployment(namespace: str, deployment: str) -> dict[str, Any]:
+    """Roll the deployment back to the previous ReplicaSet's pod template."""
+    try:
+        k = _client()
+        apps = k.AppsV1Api()
+        current = apps.read_namespaced_deployment(deployment, namespace)
+        rs_list = apps.list_namespaced_replica_set(namespace, label_selector=f"app={deployment}")
+        ordered = sorted(
+            rs_list.items,
+            key=lambda r: int((r.metadata.annotations or {}).get("deployment.kubernetes.io/revision", 0)),
+            reverse=True,
+        )
+        if len(ordered) < 2:
+            return {"status": "error", "error": "no previous ReplicaSet to roll back to"}
+        previous_rs = ordered[1]
+        current_image = current.spec.template.spec.containers[0].image
+        target_image = previous_rs.spec.template.spec.containers[0].image
+        apps.patch_namespaced_deployment(
+            deployment,
+            namespace,
+            {"spec": {"template": previous_rs.spec.template.to_dict()}},
+        )
+        return {
+            "status": "ok",
+            "action": "rollback_deployment",
+            "rolled_back_to": target_image,
+            "snapshot": {"image": current_image, "template": current.spec.template.to_dict()},
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def patch_deployment_template(namespace: str, deployment: str, template: dict) -> dict[str, Any]:
+    """Restore a previously snapshotted pod template (undo path for rollback)."""
+    try:
+        k = _client()
+        apps = k.AppsV1Api()
+        apps.patch_namespaced_deployment(deployment, namespace, {"spec": {"template": template}})
+        return {"status": "ok"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
 def pod_logs(namespace: str, selector: str, lines: int = 80, since: str = "10m") -> dict[str, Any]:
     try:
         k = _client()

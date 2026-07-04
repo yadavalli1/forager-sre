@@ -44,11 +44,13 @@ $ forager investigate INC-4827 --service api --alert "High error rate"
 
    | Tool | Backend |
    |---|---|
-   | `query_metrics` | Prometheus instant & range queries |
+   | `query_metrics` | Prometheus (or Datadog, with `provider: datadog`) |
    | `get_pod_status` | Kubernetes pod phases, restarts, OOM kills |
    | `get_recent_deploys` | Kubernetes deployment rollout history |
    | `get_pod_logs` | Kubernetes log tailing |
+   | `search_logs` | Loki LogQL search across services (`LOKI_URL`) |
    | `get_github_commits` | Recent commits & merged PRs for deploy correlation |
+   | `search_past_incidents` | Institutional memory — prior root causes from SQLite |
 
 3. **Report** — a cited root-cause analysis is posted to Slack, saved to SQLite,
    and served on a built-in dashboard.
@@ -78,6 +80,10 @@ forager serve                              # listens on :8080
 | `POST /webhook/pagerduty` | PagerDuty V3 webhook receiver |
 | `GET /investigations` | JSON list of past investigations |
 | `GET /investigations/{id}` | Full record incl. findings |
+| `POST /investigations/{id}/feedback` | 👍/👎 verdict + note; 👎 excludes the conclusion from agent memory |
+| `GET /investigations/{id}/postmortem` | Generated Markdown postmortem |
+| `GET /remediations` | Remediation proposals and their status |
+| `GET /metrics` | Prometheus self-observability metrics |
 | `GET /dashboard` | HTML dashboard |
 | `GET /health` | Liveness probe |
 
@@ -122,6 +128,9 @@ gcloud run deploy forager-sre --image forager-sre --port 8080 \
 | investigation timeout | `FORAGER_TIMEOUT_S` | `300` |
 | webhook auth token | `FORAGER_WEBHOOK_TOKEN` | disabled |
 | server concurrency | `FORAGER_MAX_CONCURRENCY` | `4` |
+| alert grouping | `FORAGER_GROUP_ALERTS=1` | disabled |
+| `loki.url` | `LOKI_URL` | disabled |
+| Datadog keys | `DD_API_KEY` / `DD_APP_KEY` / `DD_SITE` | disabled |
 
 Anthropic (`claude-*`) and OpenAI (`gpt-*`, `o1`, `o3`) models are called
 natively; **any other model name routes through
@@ -150,12 +159,41 @@ notes: |
 Matching runbooks are injected into the system prompt; excluded tools are
 removed from the agent's toolset entirely for that investigation.
 
+### Guarded remediation
+
+The agent's remediation output is **suggest-only**. Executing a fix is a
+separate, human-initiated, allowlisted, undoable step:
+
+```bash
+# Dry-run by default — shows what would happen, changes nothing:
+forager remediate INC-4827 -a rollback_deployment -n prod -d api
+
+# Execute for real (snapshots prior state first):
+forager remediate INC-4827 -a rollback_deployment -n prod -d api --yes
+# ✓ remediation #3 executed — undo with: forager remediate-undo 3
+
+forager remediate-undo 3   # restore the snapshotted state
+```
+
+Only three actions exist: `restart_deployment`, `scale_deployment`,
+`rollback_deployment`. Free-form commands are structurally impossible, none
+of these actions are exposed to the LLM as tools, and every execution stores
+a snapshot for `remediate-undo`.
+
 ## Features
 
 - **Autonomous investigation loop** — up to 12 LLM tool-use iterations, bounded by both an iteration cap and a wall-clock budget (`FORAGER_TIMEOUT_S`)
 - **Any LLM** — Claude and OpenAI natively; Bedrock, Vertex, Ollama, and gateways via LiteLLM
 - **Runbooks** — YAML guidance and tool-exclusion rules injected per alert
 - **Institutional memory** — the agent can search past investigations (`search_past_incidents` tool) so recurring incidents resolve faster
+- **Confidence scores** — every conclusion carries `CONFIDENCE: high|medium|low`; low-confidence reports are flagged for human review in Slack
+- **Guarded remediation** — allowlisted, human-approved, snapshot-backed, undoable (`forager remediate` / `remediate-undo`); never exposed to the LLM
+- **Alert correlation** — opt-in grouping (`FORAGER_GROUP_ALERTS=1`) turns an alert storm on one service into a single investigation
+- **Feedback loop** — 👍/👎 via API; downvoted conclusions are excluded from future memory searches
+- **Postmortems** — generated Markdown incident reviews (`forager postmortem` or the API)
+- **Live Slack progress** — posts "investigating…" immediately, then updates the same message with the final report
+- **Self-observability** — `/metrics` in Prometheus format (investigations, durations, dedup hits, feedback)
+- **Loki + Datadog** — LogQL search across services, and Datadog as an alternative metrics provider
 - **Deploy correlation** — cross-references Kubernetes rollouts with GitHub commits/PRs
 - **Alert deduplication** — same fingerprint within the cooldown window is skipped
 - **Persistence** — every investigation saved to SQLite; browse via `forager history` or `/dashboard`
@@ -175,6 +213,9 @@ removed from the agent's toolset entirely for that investigation.
 | `forager watch` | Poll Alertmanager and investigate new alerts |
 | `forager serve` | Run the webhook HTTP server |
 | `forager history` | Show past investigations |
+| `forager postmortem <id>` | Generate a Markdown postmortem |
+| `forager remediate <id> -a <action> -n <ns> -d <deploy> [--yes]` | Propose/execute an allowlisted remediation (dry-run default) |
+| `forager remediate-undo <rid>` | Revert an executed remediation from its snapshot |
 
 ## Development
 

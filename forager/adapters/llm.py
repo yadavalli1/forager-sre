@@ -96,6 +96,22 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "search_logs",
+        "description": (
+            "Search logs across services with a LogQL query (Loki). Unlike get_pod_logs, this "
+            'greps historical logs across all pods, e.g. \'{app="api"} |= "error"\'.'
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "LogQL query"},
+                "since": {"type": "string", "description": "Look-back window, e.g. '10m'", "default": "10m"},
+                "limit": {"type": "integer", "default": 100},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "search_past_incidents",
         "description": (
             "Search past investigations for similar incidents (same service or similar alert name) "
@@ -193,12 +209,15 @@ def _call_claude(model: str, messages: list[dict], system: str, tools: list[dict
     import anthropic  # lazy import
 
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    kwargs: dict[str, Any] = {}
+    if tools:  # tools=[] means a plain completion (e.g. postmortem generation)
+        kwargs["tools"] = tools
     resp = client.messages.create(
         model=model,
         max_tokens=4096,
         system=system,
-        tools=tools,  # type: ignore[arg-type]
         messages=messages,
+        **kwargs,
     )
 
     text = ""
@@ -247,11 +266,10 @@ def _call_openai(model: str, messages: list[dict], system: str, tools: list[dict
         oai_messages.append({"role": "system", "content": system})
     oai_messages.extend(messages)
 
-    resp = client.chat.completions.create(
-        model=model,
-        tools=_to_openai_tools(tools),  # type: ignore[arg-type]
-        messages=oai_messages,
-    )
+    kwargs: dict[str, Any] = {}
+    if tools:
+        kwargs["tools"] = _to_openai_tools(tools)
+    resp = client.chat.completions.create(model=model, messages=oai_messages, **kwargs)
     return _parse_openai_message(resp.choices[0].message)
 
 
@@ -273,5 +291,8 @@ def _call_litellm(model: str, messages: list[dict], system: str, tools: list[dic
         oai_messages.append({"role": "system", "content": system})
     oai_messages.extend(messages)
 
-    resp = litellm.completion(model=model, messages=oai_messages, tools=_to_openai_tools(tools))
+    kwargs: dict[str, Any] = {}
+    if tools:
+        kwargs["tools"] = _to_openai_tools(tools)
+    resp = litellm.completion(model=model, messages=oai_messages, **kwargs)
     return _parse_openai_message(resp.choices[0].message)

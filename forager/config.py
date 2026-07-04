@@ -25,6 +25,11 @@ class SlackConfig:
 
 
 @dataclass
+class LokiConfig:
+    url: str = ""  # e.g. http://loki:3100; empty = disabled
+
+
+@dataclass
 class Config:
     model: str = "claude-sonnet-4-6"
     provider: str = "prometheus"
@@ -34,6 +39,7 @@ class Config:
     prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
     kubernetes: KubernetesConfig = field(default_factory=KubernetesConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
+    loki: LokiConfig = field(default_factory=LokiConfig)
 
 
 CONFIG_FILE = Path("forager.yaml")
@@ -56,6 +62,10 @@ def load() -> Config:
             cfg.slack = SlackConfig(
                 **{k: v for k, v in raw["slack"].items() if k in SlackConfig.__dataclass_fields__}
             )
+        if "loki" in raw:
+            cfg.loki = LokiConfig(
+                **{k: v for k, v in raw["loki"].items() if k in LokiConfig.__dataclass_fields__}
+            )
 
     # Environment overrides
     if v := os.environ.get("FORAGER_MODEL"):
@@ -70,6 +80,8 @@ def load() -> Config:
         cfg.github_token = v
     if v := os.environ.get("FORAGER_RUNBOOKS_DIR"):
         cfg.runbooks_dir = v
+    if v := os.environ.get("LOKI_URL"):
+        cfg.loki.url = v
     return cfg
 
 

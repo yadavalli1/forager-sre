@@ -10,6 +10,9 @@ repo: acme/api                    # GitHub repo for deploy correlation
 prometheus:
   url: http://prometheus:9090     # override with PROMETHEUS_URL
 
+loki:
+  url: http://loki:3100           # optional; enables the search_logs tool (LOKI_URL)
+
 kubernetes:
   namespace: prod
 

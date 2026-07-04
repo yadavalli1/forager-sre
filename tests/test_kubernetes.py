@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+from forager.adapters import kubernetes as k8s
+
 
 def _make_pod(name: str, phase: str = "Running", restarts: int = 0, ready: bool = True):
     pod = MagicMock()
@@ -120,3 +122,49 @@ def test_pod_logs_no_pods():
         result = k8s_adapter.pod_logs("default", "app=missing")
 
     assert result["status"] == "no_pods"
+
+
+# ── write operations (remediation) ────────────────────────────────────────────
+
+
+def test_scale_deployment_snapshots_previous_replicas():
+    fake_k8s = MagicMock()
+    apps = fake_k8s.AppsV1Api.return_value
+    apps.read_namespaced_deployment.return_value.spec.replicas = 3
+
+    with patch("forager.adapters.kubernetes._client", return_value=fake_k8s):
+        result = k8s.scale_deployment("prod", "api", 10)
+
+    assert result["status"] == "ok"
+    assert result["snapshot"] == {"replicas": 3}
+    apps.patch_namespaced_deployment.assert_called_once_with("api", "prod", {"spec": {"replicas": 10}})
+
+
+def test_restart_deployment_patches_annotation():
+    fake_k8s = MagicMock()
+    apps = fake_k8s.AppsV1Api.return_value
+
+    with patch("forager.adapters.kubernetes._client", return_value=fake_k8s):
+        result = k8s.restart_deployment("prod", "api")
+
+    assert result["status"] == "ok"
+    patch_body = apps.patch_namespaced_deployment.call_args.args[2]
+    assert "kubectl.kubernetes.io/restartedAt" in str(patch_body)
+
+
+def test_rollback_without_previous_replicaset_errors():
+    fake_k8s = MagicMock()
+    apps = fake_k8s.AppsV1Api.return_value
+    apps.list_namespaced_replica_set.return_value.items = [MagicMock()]  # only one RS
+
+    with patch("forager.adapters.kubernetes._client", return_value=fake_k8s):
+        result = k8s.rollback_deployment("prod", "api")
+
+    assert result["status"] == "error"
+    assert "no previous" in result["error"]
+
+
+def test_write_op_error_returns_error_dict():
+    with patch("forager.adapters.kubernetes._client", side_effect=RuntimeError("no kubeconfig")):
+        result = k8s.scale_deployment("prod", "api", 5)
+    assert result["status"] == "error"

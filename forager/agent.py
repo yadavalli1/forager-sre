@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ from typing import Any
 from . import config as cfg_mod
 from . import runbooks as runbooks_mod
 from . import store
-from .adapters import github, kubernetes, llm, prometheus, slack
+from .adapters import datadog, github, kubernetes, llm, loki, prometheus, slack
 
 # Audit trail: every tool call the agent makes is logged here.
 audit_log = logging.getLogger("forager.audit")
@@ -36,13 +37,24 @@ Rules:
 
 Output format for your final answer (no tools):
 ROOT CAUSE: <one sentence>
+CONFIDENCE: <high | medium | low — how certain the evidence makes you>
 EVIDENCE:
 - <metric / log / deploy / commit that proves it>
 - ...
 REMEDIATION:
 - <step 1>
 - ...
+
+Use CONFIDENCE: low whenever you could not verify your hypothesis against
+telemetry — a wrong-but-confident answer is worse than an honest "unsure".
 """
+
+_CONFIDENCE_RE = re.compile(r"CONFIDENCE:\s*(high|medium|low)", re.IGNORECASE)
+
+
+def _parse_confidence(conclusion: str) -> str:
+    m = _CONFIDENCE_RE.search(conclusion)
+    return m.group(1).lower() if m else ""
 
 
 @dataclass
@@ -61,6 +73,7 @@ class Investigation:
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     findings: list[Finding] = field(default_factory=list)
     conclusion: str = ""
+    confidence: str = ""  # "high" | "medium" | "low" | ""
     slack_ts: str = ""
 
     def evidence_lines(self) -> list[str]:
@@ -73,7 +86,16 @@ class Investigation:
 
 def _execute_tool(name: str, inp: dict, cfg: cfg_mod.Config) -> dict[str, Any]:
     if name == "query_metrics":
+        if cfg.provider == "datadog":
+            return datadog.query(inp["query"], inp.get("range", "5m"))
         return prometheus.query(cfg.prometheus.url, inp["query"], inp.get("range", "5m"))
+    if name == "search_logs":
+        return loki.search_logs(
+            cfg.loki.url,
+            inp["query"],
+            inp.get("since", "10m"),
+            inp.get("limit", 100),
+        )
     if name == "get_pod_status":
         return kubernetes.pod_status(inp["namespace"], inp["selector"])
     if name == "get_recent_deploys":
@@ -131,6 +153,16 @@ def investigate(
     )
     messages: list[dict] = [{"role": "user", "content": user_msg}]
 
+    # Live progress: post a placeholder immediately so on-call sees work started,
+    # then update the same message with the final report.
+    if cfg.slack.token:
+        placeholder = slack.post(
+            cfg.slack.token,
+            cfg.slack.channel,
+            text=f"🔍 [{incident_id}] {alert} — investigating…",
+        )
+        inv.slack_ts = placeholder.get("ts", "")
+
     deadline = time.monotonic() + (max_seconds if max_seconds is not None else DEFAULT_TIMEOUT_S)
     for _ in range(12):  # iteration safety cap
         if time.monotonic() > deadline:
@@ -170,15 +202,18 @@ def investigate(
 
         messages.append({"role": "user", "content": tool_results})
 
-    # Post to Slack if configured
+    inv.confidence = _parse_confidence(inv.conclusion)
+
+    # Final report to Slack: update the placeholder in place, or post fresh.
     if cfg.slack.token:
-        blocks = slack.investigation_blocks(inv.incident_id, inv.conclusion, inv.evidence_lines())
-        result = slack.post(
-            cfg.slack.token,
-            cfg.slack.channel,
-            text=f"[{incident_id}] {alert}",
-            blocks=blocks,
+        blocks = slack.investigation_blocks(
+            inv.incident_id, inv.conclusion, inv.evidence_lines(), inv.confidence
         )
-        inv.slack_ts = result.get("ts", "")
+        text = f"[{incident_id}] {alert}"
+        if inv.slack_ts:
+            slack.update(cfg.slack.token, cfg.slack.channel, inv.slack_ts, text=text, blocks=blocks)
+        else:
+            result = slack.post(cfg.slack.token, cfg.slack.channel, text=text, blocks=blocks)
+            inv.slack_ts = result.get("ts", "")
 
     return inv

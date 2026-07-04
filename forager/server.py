@@ -64,6 +64,64 @@ def get_investigation(incident_id: str) -> dict:
     return record
 
 
+@app.post("/investigations/{incident_id}/feedback")
+async def post_feedback(incident_id: str, request: Request) -> dict:
+    """Record 👍/👎 feedback: {"verdict": "up"|"down", "note": "..."}.
+
+    Downvoted conclusions are excluded from the agent's institutional memory.
+    """
+    body = await request.json()
+    verdict = body.get("verdict", "")
+    if verdict not in ("up", "down"):
+        raise HTTPException(status_code=422, detail="verdict must be 'up' or 'down'")
+    if not store.set_feedback(incident_id, verdict, body.get("note", "")):
+        raise HTTPException(status_code=404, detail=f"Investigation '{incident_id}' not found")
+    return {"incident_id": incident_id, "verdict": verdict, "status": "ok"}
+
+
+@app.get("/investigations/{incident_id}/postmortem")
+def get_postmortem(incident_id: str):
+    from fastapi.responses import PlainTextResponse
+
+    from . import postmortem as pm_mod
+
+    try:
+        md = pm_mod.generate(incident_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Investigation '{incident_id}' not found") from None
+    return PlainTextResponse(md, media_type="text/markdown")
+
+
+@app.get("/remediations")
+def list_remediations(limit: int = 50) -> list[dict]:
+    return store.list_remediations(limit)
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus text-format self-observability metrics."""
+    from fastapi.responses import PlainTextResponse
+
+    stats = store.investigation_stats()
+    counters = store.get_counters()
+    lines = [
+        "# HELP forager_investigations_total Total investigations stored.",
+        "# TYPE forager_investigations_total counter",
+        f"forager_investigations_total {stats['count']}",
+        "# HELP forager_investigation_duration_seconds_sum Total investigation wall-clock time.",
+        "# TYPE forager_investigation_duration_seconds_sum counter",
+        f"forager_investigation_duration_seconds_sum {stats['duration_sum_s']:.2f}",
+        "# HELP forager_dedup_total Alerts skipped as duplicates.",
+        "# TYPE forager_dedup_total counter",
+        f"forager_dedup_total {counters.get('dedup_hits', 0)}",
+        "# HELP forager_feedback_total Feedback verdicts recorded.",
+        "# TYPE forager_feedback_total counter",
+    ]
+    for verdict in ("up", "down"):
+        lines.append(f'forager_feedback_total{{verdict="{verdict}"}} {stats["feedback"].get(verdict, 0)}')
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+
+
 # ── dashboard ─────────────────────────────────────────────────────────────────
 
 
@@ -125,6 +183,7 @@ def _run_investigation(
     incident_id: str, service: str, alert_name: str, desc: str, fingerprint: str
 ) -> dict[str, Any]:
     if store.is_duplicate(fingerprint, DEDUP_MINUTES):
+        store.incr_counter("dedup_hits")
         return {
             "incident_id": incident_id,
             "status": "deduplicated",
@@ -151,11 +210,39 @@ async def _run_all(jobs: list[tuple]) -> list[dict[str, Any]]:
     return list(await asyncio.gather(*futures))
 
 
+def _group_by_service(parsed: list[tuple]) -> list[tuple]:
+    """Correlate alerts: one investigation per service instead of one per alert.
+
+    An alert storm on a single service (high latency + error rate + saturation)
+    is almost always one incident; investigating it once cuts noise and cost.
+    """
+    groups: dict[str, list[tuple]] = {}
+    for job in parsed:
+        groups.setdefault(job[1], []).append(job)
+    jobs = []
+    for svc, members in groups.items():
+        if len(members) == 1:
+            jobs.append(members[0])
+            continue
+        first = members[0]
+        names = ", ".join(sorted({m[2] for m in members}))
+        descs = "\n".join(f"- {m[2]}: {m[3]}" for m in members if m[3])
+        desc = (
+            f"{len(members)} correlated alerts on this service:\n{descs}"
+            if descs
+            else (f"{len(members)} correlated alerts on this service.")
+        )
+        # Combined fingerprint so the whole group dedups as one unit.
+        combined_fp = "+".join(sorted(m[4] for m in members))
+        jobs.append((first[0], svc, names, desc, combined_fp))
+    return jobs
+
+
 @app.post("/webhook/alertmanager")
 async def alertmanager_webhook(request: Request) -> JSONResponse:
     _check_webhook_token(request)
     body: dict[str, Any] = await request.json()
-    jobs = []
+    parsed = []
     batch_fps: set[str] = set()
     for alert in body.get("alerts", []):
         if alert.get("status") != "firing":
@@ -170,7 +257,9 @@ async def alertmanager_webhook(request: Request) -> JSONResponse:
         inc_id = f"INC-{fingerprint[:6].upper()}" if fingerprint else f"INC-{name[:6].upper()}"
         annotations = alert.get("annotations", {})
         desc = annotations.get("description", annotations.get("summary", ""))
-        jobs.append((inc_id, svc, name, desc, fingerprint or inc_id))
+        parsed.append((inc_id, svc, name, desc, fingerprint or inc_id))
+
+    jobs = _group_by_service(parsed) if os.environ.get("FORAGER_GROUP_ALERTS") == "1" else parsed
     results = await _run_all(jobs)
     return JSONResponse({"processed": len(results), "investigations": results})
 

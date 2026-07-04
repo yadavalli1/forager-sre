@@ -217,5 +217,79 @@ def history(
     console.print(t)
 
 
+@app.command()
+def postmortem(
+    incident_id: str = typer.Argument(..., help="Incident ID of a stored investigation"),
+    output: str = typer.Option("", "--output", "-o", help="Write Markdown to a file instead of stdout"),
+):
+    """Generate a blameless postmortem from a stored investigation."""
+    from . import postmortem as pm_mod
+
+    try:
+        with console.status("[green]writing postmortem…[/green]", spinner="dots"):
+            md = pm_mod.generate(incident_id)
+    except KeyError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    if output:
+        with open(output, "w") as f:
+            f.write(md)
+        console.print(f"[green]✓[/green] Postmortem written to [bold]{output}[/bold]")
+    else:
+        console.print(md)
+
+
+@app.command()
+def remediate(
+    incident_id: str = typer.Argument(..., help="Incident this remediation belongs to"),
+    action: str = typer.Option(
+        ..., "--action", "-a", help="restart_deployment | scale_deployment | rollback_deployment"
+    ),
+    namespace: str = typer.Option(..., "--namespace", "-n"),
+    deployment: str = typer.Option(..., "--deployment", "-d"),
+    replicas: int = typer.Option(-1, "--replicas", help="Target replicas (scale_deployment only)"),
+    yes: bool = typer.Option(False, "--yes", help="Actually execute (default is dry-run)"),
+):
+    """Propose and (with --yes) execute an allowlisted remediation with an undo snapshot."""
+    from . import remediation
+
+    params: dict = {"namespace": namespace, "deployment": deployment}
+    if replicas >= 0:
+        params["replicas"] = replicas
+    try:
+        rid = remediation.propose(incident_id, action, params)
+    except ValueError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    result = remediation.execute(rid, dry_run=not yes)
+    if result["status"] == "dry_run":
+        console.print(f"[yellow]◇ dry-run[/yellow] remediation [bold]#{rid}[/bold]: {action} {params}")
+        console.print("  Re-run with [bold]--yes[/bold] to execute. Undo later with:")
+        console.print(f"  [bold]forager remediate-undo {rid}[/bold]")
+    elif result["status"] == "ok":
+        console.print(f"[green]✓[/green] remediation [bold]#{rid}[/bold] executed: {action}")
+        console.print(f"  Undo with: [bold]forager remediate-undo {rid}[/bold]")
+    else:
+        console.print(f"[red]✗[/red] remediation #{rid} failed: {result.get('error')}")
+        raise typer.Exit(1)
+
+
+@app.command("remediate-undo")
+def remediate_undo(
+    remediation_id: int = typer.Argument(..., help="ID printed when the remediation was executed"),
+):
+    """Revert an executed remediation using its pre-execution snapshot."""
+    from . import remediation
+
+    result = remediation.undo(remediation_id)
+    if result["status"] == "ok":
+        console.print(f"[green]✓[/green] remediation #{remediation_id} undone")
+    else:
+        console.print(f"[red]✗[/red] {result.get('error')}")
+        raise typer.Exit(1)
+
+
 def main() -> None:
     app()
