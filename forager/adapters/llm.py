@@ -1,4 +1,4 @@
-"""LLM adapter — supports Claude (default) and OpenAI."""
+"""LLM adapter — Claude and OpenAI natively, everything else via LiteLLM."""
 
 from __future__ import annotations
 
@@ -95,20 +95,37 @@ TOOLS: list[dict] = [
             "required": ["repo"],
         },
     },
+    {
+        "name": "search_past_incidents",
+        "description": (
+            "Search past investigations for similar incidents (same service or similar alert name) "
+            "and their concluded root causes. Use this early — recurring incidents often share a cause."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service": {"type": "string", "description": "Service name to match"},
+                "alert": {"type": "string", "description": "Alert name (substring match)"},
+            },
+            "required": [],
+        },
+    },
 ]
 
-# Translate forager tool list to OpenAI function format
-_OPENAI_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": t["name"],
-            "description": t["description"],
-            "parameters": t["input_schema"],
-        },
-    }
-    for t in TOOLS
-]
+
+def _to_openai_tools(tools: list[dict]) -> list[dict]:
+    """Translate forager tool schemas to OpenAI function format."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            },
+        }
+        for t in tools
+    ]
 
 
 @dataclass
@@ -127,11 +144,13 @@ class LLMResponse:
 
 
 def _is_claude(model: str) -> bool:
-    return "claude" in model.lower() or model.startswith("us.anthropic")
+    # LiteLLM models are provider-prefixed ("bedrock/...", "ollama/..."); a slash
+    # means the model is not for the native Anthropic client even if it says "claude".
+    return "/" not in model and ("claude" in model.lower() or model.startswith("us.anthropic"))
 
 
 def _is_openai(model: str) -> bool:
-    return model.startswith(("gpt-", "o1", "o3"))
+    return "/" not in model and model.startswith(("gpt-", "o1", "o3"))
 
 
 _RETRYABLE = ("529", "overloaded", "rate_limit", "rate limit", "529", "503", "502")
@@ -142,16 +161,19 @@ def call(
     messages: list[dict],
     system: str = "",
     max_retries: int = 3,
+    tools: list[dict] | None = None,
 ) -> LLMResponse:
     """Call the LLM with exponential backoff on transient errors."""
+    if tools is None:
+        tools = TOOLS
     last_exc: Exception = RuntimeError("no attempts made")
     for attempt in range(max_retries):
         try:
             if _is_claude(model):
-                return _call_claude(model, messages, system)
+                return _call_claude(model, messages, system, tools)
             if _is_openai(model):
-                return _call_openai(model, messages, system)
-            raise ValueError(f"Unknown model '{model}'. Set FORAGER_MODEL to a Claude or OpenAI model name.")
+                return _call_openai(model, messages, system, tools)
+            return _call_litellm(model, messages, system, tools)
         except ValueError:
             raise
         except Exception as exc:
@@ -167,7 +189,7 @@ def call(
 # ── Claude ────────────────────────────────────────────────────────────────────
 
 
-def _call_claude(model: str, messages: list[dict], system: str) -> LLMResponse:
+def _call_claude(model: str, messages: list[dict], system: str, tools: list[dict]) -> LLMResponse:
     import anthropic  # lazy import
 
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
@@ -175,7 +197,7 @@ def _call_claude(model: str, messages: list[dict], system: str) -> LLMResponse:
         model=model,
         max_tokens=4096,
         system=system,
-        tools=TOOLS,  # type: ignore[arg-type]
+        tools=tools,  # type: ignore[arg-type]
         messages=messages,
     )
 
@@ -199,21 +221,8 @@ def _call_claude(model: str, messages: list[dict], system: str) -> LLMResponse:
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 
 
-def _call_openai(model: str, messages: list[dict], system: str) -> LLMResponse:
-    import openai  # lazy import
-
-    client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-    oai_messages = []
-    if system:
-        oai_messages.append({"role": "system", "content": system})
-    oai_messages.extend(messages)
-
-    resp = client.chat.completions.create(
-        model=model,
-        tools=_OPENAI_TOOLS,  # type: ignore[arg-type]
-        messages=oai_messages,
-    )
-    msg = resp.choices[0].message
+def _parse_openai_message(msg: Any) -> LLMResponse:
+    """Parse an OpenAI-format chat message (also emitted by LiteLLM) into an LLMResponse."""
     text = msg.content or ""
     tool_calls: list[ToolCall] = []
     if msg.tool_calls:
@@ -227,3 +236,42 @@ def _call_openai(model: str, messages: list[dict], system: str) -> LLMResponse:
             )
     stop = "tool_use" if tool_calls else "end_turn"
     return LLMResponse(stop_reason=stop, text=text, tool_calls=tool_calls, raw_content=msg)
+
+
+def _call_openai(model: str, messages: list[dict], system: str, tools: list[dict]) -> LLMResponse:
+    import openai  # lazy import
+
+    client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+    oai_messages = []
+    if system:
+        oai_messages.append({"role": "system", "content": system})
+    oai_messages.extend(messages)
+
+    resp = client.chat.completions.create(
+        model=model,
+        tools=_to_openai_tools(tools),  # type: ignore[arg-type]
+        messages=oai_messages,
+    )
+    return _parse_openai_message(resp.choices[0].message)
+
+
+# ── LiteLLM (Bedrock, Vertex, Ollama, local, gateways) ────────────────────────
+
+
+def _call_litellm(model: str, messages: list[dict], system: str, tools: list[dict]) -> LLMResponse:
+    try:
+        import litellm  # lazy import
+    except ImportError:
+        raise ValueError(
+            f"Unknown model '{model}'. Use a Claude or OpenAI model name, or install the litellm "
+            "extra (pip install 'forager-sre[litellm]') to route any provider — e.g. "
+            "'bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0' or 'ollama/llama3'."
+        ) from None
+
+    oai_messages = []
+    if system:
+        oai_messages.append({"role": "system", "content": system})
+    oai_messages.extend(messages)
+
+    resp = litellm.completion(model=model, messages=oai_messages, tools=_to_openai_tools(tools))
+    return _parse_openai_message(resp.choices[0].message)

@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from . import config as cfg_mod
+from . import runbooks as runbooks_mod
+from . import store
 from .adapters import github, kubernetes, llm, prometheus, slack
+
+# Audit trail: every tool call the agent makes is logged here.
+audit_log = logging.getLogger("forager.audit")
+
+# Wall-clock budget per investigation, to bound token spend and runaway loops.
+DEFAULT_TIMEOUT_S = int(os.environ.get("FORAGER_TIMEOUT_S", "300"))
 
 SYSTEM_PROMPT = """\
 You are forager-sre, an autonomous SRE investigation agent.
@@ -80,6 +91,9 @@ def _execute_tool(name: str, inp: dict, cfg: cfg_mod.Config) -> dict[str, Any]:
             token=cfg.github_token,
             since_hours=inp.get("since_hours", 6),
         )
+    if name == "search_past_incidents":
+        incidents = store.search_similar(inp.get("service", ""), inp.get("alert", ""))
+        return {"status": "ok", "incidents": incidents}
     return {"status": "error", "error": f"Unknown tool: {name}"}
 
 
@@ -88,6 +102,7 @@ def investigate(
     service: str,
     alert: str,
     description: str = "",
+    max_seconds: int | None = None,
 ) -> Investigation:
     cfg = cfg_mod.load()
     inv = Investigation(
@@ -96,6 +111,16 @@ def investigate(
         alert=alert,
         description=description,
     )
+
+    # Runbooks: inject matching guidance into the system prompt and honor
+    # exclusion rules by removing those tools from the schema entirely.
+    system = SYSTEM_PROMPT
+    excluded: set[str] = set()
+    for rb in runbooks_mod.load_matching(alert, service, cfg.runbooks_dir):
+        excluded.update(rb.exclude_tools)
+        if rb.notes:
+            system += f"\n\nRunbook guidance for this alert ({rb.path}):\n{rb.notes}"
+    tools = [t for t in llm.TOOLS if t["name"] not in excluded]
 
     user_msg = (
         f"Incident: {incident_id}\n"
@@ -106,8 +131,17 @@ def investigate(
     )
     messages: list[dict] = [{"role": "user", "content": user_msg}]
 
-    for _ in range(12):  # safety cap
-        resp = llm.call(cfg.model, messages, system=SYSTEM_PROMPT)
+    deadline = time.monotonic() + (max_seconds if max_seconds is not None else DEFAULT_TIMEOUT_S)
+    for _ in range(12):  # iteration safety cap
+        if time.monotonic() > deadline:
+            audit_log.warning("%s: investigation timed out", incident_id)
+            inv.conclusion = (
+                "INVESTIGATION TIMED OUT before reaching a conclusion. "
+                f"Partial evidence gathered ({len(inv.findings)} tool calls) — human follow-up needed."
+            )
+            break
+
+        resp = llm.call(cfg.model, messages, system=system, tools=tools)
 
         if resp.stop_reason == "end_turn":
             inv.conclusion = resp.text
@@ -118,6 +152,13 @@ def investigate(
         tool_results = []
         for tc in resp.tool_calls:
             result = _execute_tool(tc.name, tc.input, cfg)
+            audit_log.info(
+                "%s: tool=%s input=%s status=%s",
+                incident_id,
+                tc.name,
+                json.dumps(tc.input)[:200],
+                result.get("status", "?"),
+            )
             inv.findings.append(Finding(tool=tc.name, input=tc.input, result=result))
             tool_results.append(
                 {

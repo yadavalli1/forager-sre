@@ -1,0 +1,15 @@
+# Example runbook. Place files like this in ./runbooks (or FORAGER_RUNBOOKS_DIR).
+# Matching runbooks are injected into the agent's system prompt, and
+# exclude_tools removes tools from the agent entirely for this alert.
+match:
+  alerts: ["HighErrorRate", "High5xx*"]
+  services: ["api"]           # optional; omit to match any service
+
+exclude_tools: []             # e.g. ["get_pod_logs"] if logs are noise here
+
+notes: |
+  For this service, elevated 5xx is almost always one of:
+  1. DB connection pool exhaustion — check pg_pool_available first.
+  2. A bad deploy in the last hour — check rollout history and recent commits.
+  Do not bother with node-level saturation metrics; the service is heavily
+  over-provisioned on CPU/memory.

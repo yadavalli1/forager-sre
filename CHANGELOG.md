@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **LiteLLM routing**: any non-Claude/OpenAI model name (e.g. `bedrock/...`,
+  `ollama/...`) routes through LiteLLM via the new `[litellm]` extra.
+- **YAML runbooks** (`runbooks/` or `FORAGER_RUNBOOKS_DIR`): per-alert
+  guidance injected into the system prompt, plus `exclude_tools` rules that
+  remove tools from the agent for matching alerts.
+- **Institutional memory**: new `search_past_incidents` agent tool backed by
+  `store.search_similar()` — recurring incidents surface their prior root cause.
+- **Investigation wall-clock budget** (`FORAGER_TIMEOUT_S`, default 300 s)
+  alongside the existing 12-iteration cap.
+- **Audit logging**: every tool call logged on the `forager.audit` logger.
+- **Webhook authentication**: optional `FORAGER_WEBHOOK_TOKEN` shared secret
+  checked against the `X-Forager-Token` header.
+- **Concurrent investigations**: webhook alerts fan out across a thread pool
+  (`FORAGER_MAX_CONCURRENCY`, default 4) instead of blocking the event loop;
+  duplicate fingerprints within one batch are collapsed.
 - Open-source project scaffolding: CI workflow, LICENSE (MIT), CONTRIBUTING,
   CODE_OF_CONDUCT, SECURITY policy, issue/PR templates, examples, Makefile.
 

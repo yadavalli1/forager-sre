@@ -36,6 +36,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+litellm = [
+    "litellm>=1.50",
+]
 
 [project.urls]
 Homepage = "https://github.com/yadavalli1/forager-sre"

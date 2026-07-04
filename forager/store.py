@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 DB_FILE = Path("forager.db")
+
+# Investigations run concurrently in server worker threads but share one
+# connection; SQLite needs the calls serialized.
+_lock = threading.Lock()
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS investigations (
@@ -65,37 +70,63 @@ def save(inv: object) -> None:
         {"tool": f.tool, "input": f.input, "status": f.result.get("status")}
         for f in inv.findings  # type: ignore[attr-defined]
     ]
-    _get().execute(
-        """INSERT OR REPLACE INTO investigations
-           (id, service, alert, description, started_at, finished_at, duration_s,
-            conclusion, findings_count, findings_json, slack_ts)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            inv.incident_id,
-            inv.service,
-            inv.alert,  # type: ignore[attr-defined]
-            getattr(inv, "description", ""),
-            inv.started_at.isoformat(),  # type: ignore[attr-defined]
-            finished.isoformat(),
-            round(duration, 2),
-            inv.conclusion,  # type: ignore[attr-defined]
-            len(inv.findings),  # type: ignore[attr-defined]
-            json.dumps(findings),
-            inv.slack_ts,  # type: ignore[attr-defined]
-        ),
-    )
-    _get().commit()
+    with _lock:
+        db = _get()
+        db.execute(
+            """INSERT OR REPLACE INTO investigations
+               (id, service, alert, description, started_at, finished_at, duration_s,
+                conclusion, findings_count, findings_json, slack_ts)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                inv.incident_id,
+                inv.service,
+                inv.alert,  # type: ignore[attr-defined]
+                getattr(inv, "description", ""),
+                inv.started_at.isoformat(),  # type: ignore[attr-defined]
+                finished.isoformat(),
+                round(duration, 2),
+                inv.conclusion,  # type: ignore[attr-defined]
+                len(inv.findings),  # type: ignore[attr-defined]
+                json.dumps(findings),
+                inv.slack_ts,  # type: ignore[attr-defined]
+            ),
+        )
+        db.commit()
 
 
 def get(incident_id: str) -> dict | None:
-    row = _get().execute("SELECT * FROM investigations WHERE id = ?", (incident_id,)).fetchone()
+    with _lock:
+        row = _get().execute("SELECT * FROM investigations WHERE id = ?", (incident_id,)).fetchone()
     return dict(row) if row else None
 
 
 def list_recent(limit: int = 50) -> list[dict]:
-    rows = (
-        _get().execute("SELECT * FROM investigations ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
-    )
+    with _lock:
+        rows = (
+            _get()
+            .execute("SELECT * FROM investigations ORDER BY started_at DESC LIMIT ?", (limit,))
+            .fetchall()
+        )
+    return [dict(r) for r in rows]
+
+
+def search_similar(service: str = "", alert: str = "", limit: int = 5) -> list[dict]:
+    """Find past concluded investigations for the same service or a similar alert name."""
+    query = "SELECT id, service, alert, started_at, conclusion FROM investigations WHERE conclusion != ''"
+    clauses: list[str] = []
+    params: list = []
+    if service:
+        clauses.append("service = ?")
+        params.append(service)
+    if alert:
+        clauses.append("alert LIKE ?")
+        params.append(f"%{alert}%")
+    if clauses:
+        query += " AND (" + " OR ".join(clauses) + ")"
+    query += " ORDER BY started_at DESC LIMIT ?"
+    params.append(limit)
+    with _lock:
+        rows = _get().execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -104,7 +135,8 @@ def list_recent(limit: int = 50) -> list[dict]:
 
 def is_duplicate(fingerprint: str, cooldown_minutes: int = 30) -> bool:
     """Return True if this fingerprint was investigated within the cooldown window."""
-    row = _get().execute("SELECT at FROM fingerprints WHERE fp = ?", (fingerprint,)).fetchone()
+    with _lock:
+        row = _get().execute("SELECT at FROM fingerprints WHERE fp = ?", (fingerprint,)).fetchone()
     if not row:
         return False
     at = datetime.fromisoformat(row["at"])
@@ -113,9 +145,10 @@ def is_duplicate(fingerprint: str, cooldown_minutes: int = 30) -> bool:
 
 
 def mark_fingerprint(fingerprint: str) -> None:
-    db = _get()
-    db.execute(
-        "INSERT OR REPLACE INTO fingerprints (fp, at) VALUES (?, ?)",
-        (fingerprint, datetime.now(UTC).isoformat()),
-    )
-    db.commit()
+    with _lock:
+        db = _get()
+        db.execute(
+            "INSERT OR REPLACE INTO fingerprints (fp, at) VALUES (?, ?)",
+            (fingerprint, datetime.now(UTC).isoformat()),
+        )
+        db.commit()

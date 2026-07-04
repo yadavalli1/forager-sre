@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +17,17 @@ app = FastAPI(title="forager-sre", version="0.1.0")
 
 # Cooldown window: don't re-investigate the same alert fingerprint within N minutes
 DEDUP_MINUTES = int(os.environ.get("FORAGER_DEDUP_MINUTES", "30"))
+
+# Investigations block for 20–60s each; run them off the event loop so
+# concurrent webhooks don't queue behind one another.
+_pool = ThreadPoolExecutor(max_workers=int(os.environ.get("FORAGER_MAX_CONCURRENCY", "4")))
+
+
+def _check_webhook_token(request: Request) -> None:
+    """If FORAGER_WEBHOOK_TOKEN is set, require it in the X-Forager-Token header."""
+    token = os.environ.get("FORAGER_WEBHOOK_TOKEN", "")
+    if token and request.headers.get("x-forager-token") != token:
+        raise HTTPException(status_code=401, detail="invalid or missing X-Forager-Token header")
 
 
 # ── health / meta ─────────────────────────────────────────────────────────────
@@ -131,28 +144,42 @@ def _run_investigation(
     }
 
 
+async def _run_all(jobs: list[tuple]) -> list[dict[str, Any]]:
+    """Run investigations concurrently in the thread pool, off the event loop."""
+    loop = asyncio.get_running_loop()
+    futures = [loop.run_in_executor(_pool, _run_investigation, *job) for job in jobs]
+    return list(await asyncio.gather(*futures))
+
+
 @app.post("/webhook/alertmanager")
 async def alertmanager_webhook(request: Request) -> JSONResponse:
+    _check_webhook_token(request)
     body: dict[str, Any] = await request.json()
-    results = []
+    jobs = []
+    batch_fps: set[str] = set()
     for alert in body.get("alerts", []):
         if alert.get("status") != "firing":
             continue
         labels = alert.get("labels", {})
         fingerprint = alert.get("fingerprint", "")
+        if fingerprint and fingerprint in batch_fps:
+            continue
+        batch_fps.add(fingerprint)
         name = labels.get("alertname", "UnknownAlert")
         svc = labels.get("service", labels.get("job", "unknown"))
         inc_id = f"INC-{fingerprint[:6].upper()}" if fingerprint else f"INC-{name[:6].upper()}"
         annotations = alert.get("annotations", {})
         desc = annotations.get("description", annotations.get("summary", ""))
-        results.append(_run_investigation(inc_id, svc, name, desc, fingerprint or inc_id))
+        jobs.append((inc_id, svc, name, desc, fingerprint or inc_id))
+    results = await _run_all(jobs)
     return JSONResponse({"processed": len(results), "investigations": results})
 
 
 @app.post("/webhook/pagerduty")
 async def pagerduty_webhook(request: Request) -> JSONResponse:
+    _check_webhook_token(request)
     body: dict[str, Any] = await request.json()
-    results = []
+    jobs = []
     for event in body.get("events", []):
         if event.get("event_type") not in ("incident.triggered", "incident.acknowledged"):
             continue
@@ -162,5 +189,6 @@ async def pagerduty_webhook(request: Request) -> JSONResponse:
         svc = data.get("service", {}).get("name", "unknown")
         desc = data.get("body", {}).get("details", "")
         inc_id = f"PD-{number}"
-        results.append(_run_investigation(inc_id, svc, title, desc, inc_id))
+        jobs.append((inc_id, svc, title, desc, inc_id))
+    results = await _run_all(jobs)
     return JSONResponse({"processed": len(results), "investigations": results})

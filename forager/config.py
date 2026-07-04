@@ -30,6 +30,7 @@ class Config:
     provider: str = "prometheus"
     repo: str = "."
     github_token: str = ""
+    runbooks_dir: str = "runbooks"
     prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
     kubernetes: KubernetesConfig = field(default_factory=KubernetesConfig)
     slack: SlackConfig = field(default_factory=SlackConfig)
@@ -42,7 +43,7 @@ def load() -> Config:
     cfg = Config()
     if CONFIG_FILE.exists():
         raw = yaml.safe_load(CONFIG_FILE.read_text()) or {}
-        for key in ("model", "provider", "repo"):
+        for key in ("model", "provider", "repo", "runbooks_dir"):
             if key in raw:
                 setattr(cfg, key, raw[key])
         if "prometheus" in raw:
@@ -67,6 +68,8 @@ def load() -> Config:
         cfg.slack.channel = v
     if v := os.environ.get("GITHUB_TOKEN"):
         cfg.github_token = v
+    if v := os.environ.get("FORAGER_RUNBOOKS_DIR"):
+        cfg.runbooks_dir = v
     return cfg
 
 
@@ -75,6 +78,7 @@ def save(cfg: Config) -> None:
         "model": cfg.model,
         "provider": cfg.provider,
         "repo": cfg.repo,
+        "runbooks_dir": cfg.runbooks_dir,
         "prometheus": {"url": cfg.prometheus.url},
         "kubernetes": {
             "context": cfg.kubernetes.context,

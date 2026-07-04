@@ -118,16 +118,50 @@ gcloud run deploy forager-sre --image forager-sre --port 8080 \
 | `slack.token` / `slack.channel` | `SLACK_TOKEN` / `SLACK_CHANNEL` | disabled |
 | `github_token` | `GITHUB_TOKEN` | unauthenticated |
 | dedup window | `FORAGER_DEDUP_MINUTES` | `30` |
+| `runbooks_dir` | `FORAGER_RUNBOOKS_DIR` | `runbooks` |
+| investigation timeout | `FORAGER_TIMEOUT_S` | `300` |
+| webhook auth token | `FORAGER_WEBHOOK_TOKEN` | disabled |
+| server concurrency | `FORAGER_MAX_CONCURRENCY` | `4` |
 
-Both Anthropic (`claude-*`) and OpenAI (`gpt-*`, `o1`, `o3`) models are
-supported; the provider is inferred from the model name.
+Anthropic (`claude-*`) and OpenAI (`gpt-*`, `o1`, `o3`) models are called
+natively; **any other model name routes through
+[LiteLLM](https://github.com/BerriAI/litellm)** (`pip install
+'forager-sre[litellm]'`), unlocking Bedrock, Vertex, Ollama/local models, and
+LLM gateways — e.g. `FORAGER_MODEL=bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0`
+or `FORAGER_MODEL=ollama/llama3`.
+
+### Runbooks
+
+Drop YAML runbooks in `runbooks/` to give the agent per-alert guidance and
+tool exclusion rules — production teams report this matters more than model
+choice for investigation quality:
+
+```yaml
+# runbooks/high-error-rate.yaml
+match:
+  alerts: ["HighErrorRate", "High5xx*"]
+  services: ["api"]
+exclude_tools: ["get_pod_logs"]   # logs are DEBUG noise on this service
+notes: |
+  Elevated 5xx here is almost always DB pool exhaustion or a bad deploy.
+  Check pg_pool_available first, then rollout history.
+```
+
+Matching runbooks are injected into the system prompt; excluded tools are
+removed from the agent's toolset entirely for that investigation.
 
 ## Features
 
-- **Autonomous investigation loop** — up to 12 LLM tool-use iterations with a safety cap
+- **Autonomous investigation loop** — up to 12 LLM tool-use iterations, bounded by both an iteration cap and a wall-clock budget (`FORAGER_TIMEOUT_S`)
+- **Any LLM** — Claude and OpenAI natively; Bedrock, Vertex, Ollama, and gateways via LiteLLM
+- **Runbooks** — YAML guidance and tool-exclusion rules injected per alert
+- **Institutional memory** — the agent can search past investigations (`search_past_incidents` tool) so recurring incidents resolve faster
 - **Deploy correlation** — cross-references Kubernetes rollouts with GitHub commits/PRs
 - **Alert deduplication** — same fingerprint within the cooldown window is skipped
 - **Persistence** — every investigation saved to SQLite; browse via `forager history` or `/dashboard`
+- **Concurrent investigations** — webhook bursts fan out across a thread pool
+- **Audit logging** — every tool call is logged with input and status (`forager.audit` logger)
+- **Webhook auth** — optional shared-secret header (`FORAGER_WEBHOOK_TOKEN`)
 - **Resilient LLM calls** — exponential-backoff retry on 502/503/529/rate-limit errors
 - **Slack reports** — Block Kit messages with conclusion and evidence
 - **Zero required infra** — SQLite built in; Slack, GitHub, and Kubernetes are all optional
