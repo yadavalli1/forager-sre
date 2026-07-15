@@ -19,6 +19,9 @@ dependencies = [
     "slack-sdk>=3.33.0",
 ]
 
+[project.optional-dependencies]
+aws = ["boto3>=1.34.0"]
+
 [project.scripts]
 forager = "forager.cli:main"
 

@@ -81,6 +81,29 @@ def investigate(
     _print_investigation(inv)
 
 
+# ── onecall ───────────────────────────────────────────────────────────────────
+
+@app.command()
+def onecall(
+    query: str = typer.Argument(..., help="Free-form SRE query, e.g. 'checkout-api is throwing 5xx since 10 min'"),
+):
+    """One-call SRE agent: describe a situation in plain English and let forager triage it end-to-end.
+
+    The agent will discover firing alerts (if needed), query metrics, check pods/logs/deploys,
+    correlate recent commits, and produce a root-cause analysis with remediation steps.
+    """
+    cfg = cfg_mod.load()
+    console.print(f"\n[bold green]◑[/bold green] one-call SRE agent")
+    console.print(f"  model = [cyan]{cfg.model}[/cyan]  prom = [cyan]{cfg.prometheus.url}[/cyan]")
+    console.print(f"  query = [italic]{query}[/italic]\n")
+
+    with console.status("[green]triaging…[/green]", spinner="dots"):
+        inv = agent.onecall(query)
+
+    store.save(inv)
+    _print_investigation(inv)
+
+
 def _print_investigation(inv: agent.Investigation) -> None:
     # Tool call table
     if inv.findings:
