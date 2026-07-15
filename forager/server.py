@@ -158,3 +158,32 @@ async def pagerduty_webhook(request: Request) -> JSONResponse:
         inc_id = f"PD-{number}"
         results.append(_run_investigation(inc_id, svc, title, desc, inc_id))
     return JSONResponse({"processed": len(results), "investigations": results})
+
+
+# ── one-call agent ────────────────────────────────────────────────────────────
+
+@app.post("/agent/onecall")
+async def agent_onecall(request: Request) -> JSONResponse:
+    """One-call SRE agent: accept a free-form query and return a full investigation.
+
+    Request body: {"query": "<natural-language description of the situation>"}
+    """
+    body: dict[str, Any] = await request.json()
+    query = (body.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Field 'query' is required and must be non-empty.")
+
+    inv = agent.onecall(query)
+    store.save(inv)
+    return JSONResponse({
+        "incident_id": inv.incident_id,
+        "service": inv.service,
+        "alert": inv.alert,
+        "query": inv.description,
+        "started_at": inv.started_at.isoformat(),
+        "conclusion": inv.conclusion,
+        "findings": len(inv.findings),
+        "evidence": inv.evidence_lines(),
+        "slack_ts": inv.slack_ts,
+        "status": "ok",
+    })
